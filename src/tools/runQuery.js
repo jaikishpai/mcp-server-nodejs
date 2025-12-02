@@ -1,0 +1,90 @@
+import { executeQuery } from '../oracle.js';
+import { logger } from '../logger.js';
+
+/**
+ * MCP Tool: Execute a SQL query
+ * @param {Object} args - Tool arguments
+ * @param {string} args.sql - SQL query to execute
+ * @param {Object} args.binds - Optional bind parameters (as JSON string or object)
+ * @param {number} args.maxRows - Maximum number of rows to return (default: 1000)
+ * @returns {Promise<Object>} Query results
+ */
+export async function runQuery(args) {
+  try {
+    const { sql, binds = {}, maxRows = 1000 } = args;
+
+    if (!sql || typeof sql !== 'string') {
+      throw new Error('SQL query is required and must be a string');
+    }
+
+    // Parse binds if provided as string
+    let parsedBinds = binds;
+    if (typeof binds === 'string') {
+      try {
+        parsedBinds = JSON.parse(binds);
+      } catch (e) {
+        logger.warn('Failed to parse binds JSON, using as-is', { binds });
+      }
+    }
+
+    // Validate maxRows
+    const maxRowsNum = parseInt(maxRows);
+    if (isNaN(maxRowsNum) || maxRowsNum < 1) {
+      throw new Error('maxRows must be a positive integer');
+    }
+
+    logger.info('Executing SQL query via MCP tool', { 
+      sqlLength: sql.length,
+      hasBinds: Object.keys(parsedBinds).length > 0,
+      maxRows: maxRowsNum
+    });
+
+    const result = await executeQuery(sql, parsedBinds, { maxRows: maxRowsNum });
+
+    return {
+      success: true,
+      data: {
+        rows: result.rows,
+        rowCount: result.rowCount,
+        columnNames: result.meta.columnNames,
+        columnCount: result.meta.columnCount
+      }
+    };
+  } catch (error) {
+    logger.error('runQuery tool error', { error: error.message, stack: error.stack });
+    return {
+      success: false,
+      error: {
+        message: error.message,
+        code: error.errorNum || 'UNKNOWN',
+        sqlState: error.sqlState || null
+      }
+    };
+  }
+}
+
+export const runQuerySchema = {
+  name: 'runQuery',
+  description: 'Execute a SQL query against the Oracle database. Returns query results as JSON.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      sql: {
+        type: 'string',
+        description: 'SQL query to execute (SELECT, INSERT, UPDATE, DELETE, etc.)'
+      },
+      binds: {
+        type: 'object',
+        description: 'Optional bind parameters as key-value pairs (e.g., {"id": 123, "name": "test"})',
+        default: {}
+      },
+      maxRows: {
+        type: 'number',
+        description: 'Maximum number of rows to return (default: 1000)',
+        default: 1000
+      }
+    },
+    required: ['sql']
+  }
+};
+
