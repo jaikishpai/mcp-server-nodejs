@@ -32,26 +32,61 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Oracle Instant Client
-# Oracle Instant Client 21.1.0.0.0 for Linux x64
-# Note: For production, consider using a base image with Oracle Client pre-installed
-# or use Oracle's official container images
-ENV ORACLE_CLIENT_VERSION=21.1.0.0.0
-ENV ORACLE_CLIENT_PATH=/usr/lib/oracle/instantclient_21_1
-
+# REQUIRED for database operations (runQuery, listTables, getSchema)
+# Replace ORACLE_CLIENT_DOWNLOAD_URL in docker-compose.yml build.args with your direct download link
+ARG ORACLE_CLIENT_DOWNLOAD_URL
 RUN mkdir -p /usr/lib/oracle && \
     cd /usr/lib/oracle && \
-    wget -q https://download.oracle.com/otn_software/linux/instantclient/211000/instantclient-basic-linux.x64-21.1.0.0.0.zip && \
-    unzip instantclient-basic-linux.x64-21.1.0.0.0.zip && \
-    rm instantclient-basic-linux.x64-21.1.0.0.0.zip && \
-    cd instantclient_21_1 && \
-    ln -s libclntsh.so.21.1 libclntsh.so && \
-    ln -s libocci.so.21.1 libocci.so
+    echo "Downloading Oracle Instant Client from: ${ORACLE_CLIENT_DOWNLOAD_URL}" && \
+    wget --no-check-certificate --no-cookies --header "Cookie: oraclelicense=accept-securebackup-cookie" \
+        ${ORACLE_CLIENT_DOWNLOAD_URL} -O oracle-client.zip || \
+    (echo "ERROR: Failed to download Oracle Instant Client" && \
+     echo "URL: ${ORACLE_CLIENT_DOWNLOAD_URL}" && \
+     echo "Please verify the URL is correct and accessible" && \
+     exit 1) && \
+    echo "Download complete, extracting..." && \
+    unzip -q oracle-client.zip || \
+    (echo "ERROR: Failed to extract Oracle Instant Client zip file" && \
+     exit 1) && \
+    rm oracle-client.zip && \
+    INSTALL_DIR=$(ls -d instantclient_* | head -1) && \
+    if [ -z "${INSTALL_DIR}" ]; then \
+        echo "ERROR: Could not find instantclient directory after extraction"; \
+        echo "Contents of /usr/lib/oracle:"; \
+        ls -la; \
+        exit 1; \
+    fi && \
+    echo "Found installation directory: ${INSTALL_DIR}" && \
+    cd ${INSTALL_DIR} && \
+    LIB_VERSION=$(ls libclntsh.so.* 2>/dev/null | head -1 | sed 's/libclntsh.so.//') && \
+    if [ -z "${LIB_VERSION}" ]; then \
+        echo "ERROR: Could not find libclntsh.so library"; \
+        echo "Contents of ${INSTALL_DIR}:"; \
+        ls -la; \
+        exit 1; \
+    fi && \
+    ln -sf libclntsh.so.${LIB_VERSION} libclntsh.so && \
+    ln -sf libocci.so.${LIB_VERSION} libocci.so && \
+    echo "Oracle Client installed successfully" && \
+    INSTALL_FULL_PATH="/usr/lib/oracle/${INSTALL_DIR}" && \
+    echo "Install directory: ${INSTALL_FULL_PATH}" && \
+    echo "Library version: ${LIB_VERSION}" && \
+    echo "${INSTALL_FULL_PATH}" > /etc/oracle_client_path.txt
+
+# Set Oracle environment variables based on detected installation
+# Read the detected path and set environment variables
+RUN if [ -f /etc/oracle_client_path.txt ]; then \
+        INSTALL_DIR=$(cat /etc/oracle_client_path.txt) && \
+        echo "Detected Oracle Client path: ${INSTALL_DIR}" && \
+        echo "${INSTALL_DIR}" > /tmp/oracle_path.env; \
+    fi
 
 # Set Oracle environment variables
-ENV LD_LIBRARY_PATH=/usr/lib/oracle/instantclient_21_1:$LD_LIBRARY_PATH
-ENV ORACLE_HOME=/usr/lib/oracle/instantclient_21_1
-ENV TNS_ADMIN=/usr/lib/oracle/instantclient_21_1/network/admin
-ENV ORACLE_CLIENT_PATH=/usr/lib/oracle/instantclient_21_1
+# Use detected path if available, otherwise use default
+ENV ORACLE_CLIENT_PATH=/usr/lib/oracle/instantclient_23_26
+ENV LD_LIBRARY_PATH=/usr/lib/oracle/instantclient_23_26
+ENV ORACLE_HOME=/usr/lib/oracle/instantclient_23_26
+ENV TNS_ADMIN=/usr/lib/oracle/instantclient_23_26/network/admin
 
 # Copy dependencies from builder
 COPY --from=builder /app/node_modules ./node_modules
