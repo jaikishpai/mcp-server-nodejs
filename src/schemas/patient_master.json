@@ -1,0 +1,114 @@
+{
+  "tableName": "P_COMMONUSEROBJECT.PATIENT_MASTER",
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Patient Master Table Schema",
+    "description": "Describes the structure and meaning of the P_COMMONUSEROBJECT.PATIENT_MASTER table in Oracle DB. Used by the MCP server to generate safe SQL queries.",
+    "type": "object",
+    "properties": {
+      "PATIENT_PKEY": {
+        "type": "integer",
+        "description": "Primary numeric key for the patient record (unique identifier)."
+      },
+      "PATIENT_UKEY": {
+        "type": "string",
+        "description": "Unique business key or patient code."
+      },
+      "EXT_FIRST_NAME": {
+        "type": "string",
+        "description": "Patient's first name."
+      },
+      "EXT_LAST_NAME": {
+        "type": "string",
+        "description": "Patient's last name."
+      },
+      "EXT_DATE_OF_BIRTH": {
+        "type": "string",
+        "format": "date",
+        "description": "Date of birth."
+      },
+      "EXT_SEX": {
+        "type": "string",
+        "enum": ["M", "F", "O"],
+        "description": "Gender of the patient."
+      },
+      "EXT_CITY": {
+        "type": "string",
+        "description": "City of residence."
+      },
+      "EXT_STATE": {
+        "type": "string",
+        "description": "State of residence."
+      },
+      "EXT_HOME_PHONE": {
+        "type": "string",
+        "description": "Home phone number."
+      },
+      "EXT_CELL_PHONE_CALL": {
+        "type": "string",
+        "description": "Cell phone number used for calls."
+      },
+      "EXT_EMAIL": {
+        "type": "string",
+        "description": "Primary email of the patient."
+      },
+      "MEDICAL_RECORD_NUM": {
+        "type": "string",
+        "description": "Hospital medical record number (MRN)."
+      },
+      "SSN": {
+        "type": "string",
+        "description": "Social Security Number (if applicable)."
+      },
+      "LAST_VISIT_DATE": {
+        "type": "string",
+        "format": "date",
+        "description": "Date of most recent visit."
+      },
+      "APPT_DATE": {
+        "type": "string",
+        "format": "date",
+        "description": "Upcoming appointment date."
+      },
+      "DUE_PATIENT": {
+        "type": "number",
+        "description": "Outstanding patient balance due."
+      },
+      "CREATION_DATE": {
+        "type": "string",
+        "format": "date-time",
+        "description": "Record creation timestamp."
+      },
+      "MODIFICATION_DATE": {
+        "type": "string",
+        "format": "date-time",
+        "description": "Record last modified timestamp."
+      }
+    },
+    "required": ["PATIENT_PKEY", "PATIENT_UKEY", "EXT_FIRST_NAME", "EXT_LAST_NAME", "CREATION_DATE"],
+    "examples": [
+      {
+        "PATIENT_PKEY": 12345,
+        "PATIENT_UKEY": "P0000456",
+        "EXT_FIRST_NAME": "John",
+        "EXT_LAST_NAME": "Doe",
+        "EXT_DATE_OF_BIRTH": "1988-04-15",
+        "EXT_SEX": "M",
+        "EXT_CITY": "Dallas",
+        "EXT_STATE": "TX",
+        "EXT_HOME_PHONE": "2145551234",
+        "EXT_CELL_PHONE_CALL": "2145559876",
+        "MEDICAL_RECORD_NUM": "MRN123456",
+        "LAST_VISIT_DATE": "2024-09-30",
+        "DUE_PATIENT": 120.50,
+        "CREATION_DATE": "2023-11-12T10:00:00Z"
+      }
+    ]
+  },
+  "mcp_sql_templates": {
+    "select_all": "SELECT * FROM P_COMMONUSEROBJECT.PATIENT_MASTER FETCH FIRST 10 ROWS ONLY",
+    "select_by_id": "SELECT * FROM P_COMMONUSEROBJECT.PATIENT_MASTER WHERE PATIENT_PKEY = :id",
+    "select_by_name": "SELECT * FROM P_COMMONUSEROBJECT.PATIENT_MASTER WHERE EXT_LAST_NAME LIKE :name"
+  }
+}
+
