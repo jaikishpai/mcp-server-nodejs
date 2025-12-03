@@ -6,13 +6,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Oracle Instant Client Download URL (BUILD-TIME variable)
+        # REPLACE THIS LINE (line 12) with your direct download link:
+        - ORACLE_CLIENT_DOWNLOAD_URL=${ORACLE_CLIENT_DOWNLOAD_URL:-https://download.oracle.com/otn_software/linux/instantclient/2326000/instantclient-basic-linux.x64-23.26.0.0.0.zip}
     container_name: mcp-oracle-server
     environment:
       # Oracle Database Configuration
       - ORACLE_USER=${ORACLE_USER}
       - ORACLE_PASS=${ORACLE_PASS}
       - ORACLE_CONN=${ORACLE_CONN}
-      
       # Oracle Connection Pool Configuration
       - ORACLE_POOL_MIN=${ORACLE_POOL_MIN:-2}
       - ORACLE_POOL_MAX=${ORACLE_POOL_MAX:-10}
@@ -56,51 +59,27 @@ services:
       start_period: 40s
 
   # NL2SQL FastAPI Service (Placeholder)
-  # Replace this with your actual NL2SQL service image
+  # This is a placeholder service for natural language to SQL conversion
+  # Replace this with your actual NL2SQL service by:
+  # 1. Updating the build context to point to your NL2SQL service
+  # 2. Or replacing the image with your pre-built NL2SQL service image
+  # 3. Or commenting out this service if you don't need NL2SQL functionality
   nl2sql-service:
-    image: python:3.10-slim
+    build:
+      context: ./nl2sql-service
+      dockerfile: Dockerfile
     container_name: nl2sql-service
-    working_dir: /app
-    command: >
-      sh -c "
-        pip install --no-cache-dir fastapi uvicorn pydantic &&
-        python -c \"
-from fastapi import FastAPI
-from pydantic import BaseModel
-import uvicorn
-
-app = FastAPI(title='NL2SQL Service', version='1.0.0')
-
-class QueryRequest(BaseModel):
-    query: str
-
-@app.post('/query')
-async def query(request: QueryRequest):
-    # Placeholder implementation - replace with your actual NL2SQL logic
-    return {
-        'sql': f'SELECT * FROM table WHERE description LIKE \\'%{request.query}%\\'',
-        'explanation': 'This is a placeholder NL2SQL service. Replace with your actual implementation.',
-        'confidence': 0.5
-    }
-
-@app.get('/health')
-async def health():
-    return {'status': 'ok', 'service': 'nl2sql-service'}
-
-if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=8500)
-        \"
-      "
     ports:
       - "8500:8500"
     networks:
       - backend
     restart: always
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8500/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8500/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 10s
 
   # Oracle Database (Optional - for local testing only)
   # Uncomment and configure if you want to run a local Oracle instance

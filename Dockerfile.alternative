@@ -1,0 +1,83 @@
+# Alternative Dockerfile using Oracle's official base image approach
+# This is a more reliable method that doesn't require downloading Oracle Client
+
+# Multi-stage build for MCP Oracle Server
+
+# Stage 1: Build dependencies
+FROM node:20-slim AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci --only=production && npm cache clean --force
+
+# Stage 2: Runtime with Oracle Instant Client
+FROM node:20-slim
+
+WORKDIR /app
+
+# Install runtime dependencies for Oracle Instant Client
+RUN apt-get update && apt-get install -y \
+    libaio1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Option 1: Use Oracle Instant Client RPM packages (if available)
+# RUN apt-get install -y alien && \
+#     wget https://download.oracle.com/otn_software/linux/instantclient/oracle-instantclient-basic-21.1.0.0.0-1.x86_64.rpm && \
+#     alien -i oracle-instantclient-basic-21.1.0.0.0-1.x86_64.rpm
+
+# Option 2: Manual download (requires license acceptance)
+# Download Oracle Instant Client manually and place in build context
+# Then uncomment the following:
+# COPY oracle-instantclient-basic-linux.x64-21.1.0.0.0.zip /tmp/
+# RUN cd /usr/lib && \
+#     unzip /tmp/oracle-instantclient-basic-linux.x64-21.1.0.0.0.zip && \
+#     cd instantclient_21_1 && \
+#     ln -s libclntsh.so.21.1 libclntsh.so && \
+#     ln -s libocci.so.21.1 libocci.so && \
+#     rm /tmp/oracle-instantclient-basic-linux.x64-21.1.0.0.0.zip
+
+# Option 3: Use a pre-built base image (recommended for production)
+# FROM node-oracle:20-slim  # If such an image exists
+# Or build a custom base image with Oracle Client pre-installed
+
+# Set Oracle environment variables (adjust path based on installation method)
+ENV ORACLE_CLIENT_PATH=/usr/lib/oracle/instantclient_21_1
+ENV LD_LIBRARY_PATH=/usr/lib/oracle/instantclient_21_1:$LD_LIBRARY_PATH
+ENV ORACLE_HOME=/usr/lib/oracle/instantclient_21_1
+ENV TNS_ADMIN=/usr/lib/oracle/instantclient_21_1/network/admin
+
+# Copy dependencies from builder
+COPY --from=builder /app/node_modules ./node_modules
+
+# Copy application source
+COPY src/ ./src/
+COPY package*.json ./
+
+# Create logs directory and set permissions
+RUN mkdir -p logs && \
+    chown -R node:node /app
+
+# Switch to non-root user
+USER node
+
+# Expose port for HTTP server
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:3000/health || exit 1
+
+# Start the server
+CMD ["node", "src/server.js"]
+

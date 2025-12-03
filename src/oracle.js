@@ -21,8 +21,39 @@ export async function initializePool(config) {
 export async function initPool(config) {
   try {
     // Set Oracle Client library path (for Docker)
-    if (process.env.ORACLE_CLIENT_PATH) {
-      oracledb.initOracleClient({ libDir: process.env.ORACLE_CLIENT_PATH });
+    let clientPath = process.env.ORACLE_CLIENT_PATH;
+    
+    // Try to auto-detect the actual installation directory
+    if (!clientPath || clientPath === '/usr/lib/oracle') {
+      const fs = await import('fs');
+      const path = await import('path');
+      
+      // Check for stored path from build
+      const storedPath = '/etc/oracle_client_path.txt';
+      if (fs.existsSync(storedPath)) {
+        clientPath = fs.readFileSync(storedPath, 'utf8').trim();
+        logger.info('Using Oracle Client path from build', { path: clientPath });
+      } else {
+        // Auto-detect by scanning /usr/lib/oracle
+        const oracleBase = '/usr/lib/oracle';
+        if (fs.existsSync(oracleBase)) {
+          const dirs = fs.readdirSync(oracleBase).filter(dir => dir.startsWith('instantclient_'));
+          if (dirs.length > 0) {
+            clientPath = path.join(oracleBase, dirs[0]);
+            logger.info('Auto-detected Oracle Client path', { path: clientPath });
+          }
+        }
+      }
+    }
+    
+    if (clientPath && clientPath !== '/usr/lib/oracle') {
+      // Set LD_LIBRARY_PATH to the client path so libraries can be found
+      process.env.LD_LIBRARY_PATH = clientPath + (process.env.LD_LIBRARY_PATH ? ':' + process.env.LD_LIBRARY_PATH : '');
+      oracledb.initOracleClient({ libDir: clientPath });
+      logger.info('Oracle Client initialized', { libDir: clientPath, ldLibraryPath: process.env.LD_LIBRARY_PATH });
+    } else {
+      // Let oracledb try to find it automatically (may work if in standard location)
+      logger.warn('ORACLE_CLIENT_PATH not set, letting oracledb auto-detect');
     }
 
     pool = await oracledb.createPool({
