@@ -9,6 +9,7 @@ import { runQuery, runQuerySchema } from './tools/runQuery.js';
 import { listTables, listTablesSchema } from './tools/listTables.js';
 import { getSchema, getSchemaSchema } from './tools/getSchema.js';
 import { nl2sql, nl2sqlSchema } from './tools/nl2sql.js';
+import { getSemanticMappings, getSemanticMappingsSchema } from './tools/getSemanticMappings.js';
 
 import dotenv from 'dotenv';
 import http from 'http';
@@ -84,7 +85,8 @@ async function main() {
           runQuerySchema,
           listTablesSchema,
           getSchemaSchema,
-          nl2sqlSchema
+          nl2sqlSchema,
+          getSemanticMappingsSchema
         ]
       };
     });
@@ -109,6 +111,9 @@ async function main() {
             break;
           case 'nl2sql':
             result = await nl2sql(args);
+            break;
+          case 'getSemanticMappings':
+            result = await getSemanticMappings(args);
             break;
           default:
             throw new Error(`Unknown tool: ${name}`);
