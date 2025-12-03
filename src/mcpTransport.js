@@ -87,9 +87,14 @@ export function createMcpHttpHandler(mcpServer) {
     const method = req.body.method;
     const params = req.body.params || {};
 
+    // Check if this is a notification (no id or id is null)
+    // JSON-RPC 2.0 notifications don't have an id and don't require a response
+    const isNotification = requestId === undefined || requestId === null;
+
     logger.debug('MCP HTTP request received', {
       method,
       requestId,
+      isNotification,
       hasParams: Object.keys(params).length > 0
     });
 
@@ -103,7 +108,7 @@ export function createMcpHttpHandler(mcpServer) {
       // Route to appropriate handler
       let response;
       
-      logger.debug('Routing MCP request', { method });
+      logger.debug('Routing MCP request', { method, isNotification });
       
       if (method === 'tools/list') {
         const handler = handlers.get('tools/list');
@@ -138,21 +143,41 @@ export function createMcpHttpHandler(mcpServer) {
             version: '1.0.0'
           }
         };
+      } else if (method === 'notifications/initialized') {
+        // Handle initialized notification (no response needed)
+        // This is sent by the client after receiving the initialize response
+        logger.info('Client initialized notification received');
+        // Notifications don't require a response, just return 200 with no body
+        return res.status(200).end();
+      } else if (method && method.startsWith('notifications/')) {
+        // Handle other notifications gracefully
+        logger.debug('Notification received', { method });
+        // Notifications don't require a response
+        return res.status(200).end();
       } else {
         throw new Error(`Unsupported method: ${method}`);
       }
 
-      // Send JSON-RPC response
-      res.status(200).json({
-        jsonrpc: '2.0',
-        id: requestId,
-        result: response
-      });
+      // Only send response if this is a request (not a notification)
+      if (!isNotification) {
+        // Send JSON-RPC response
+        res.status(200).json({
+          jsonrpc: '2.0',
+          id: requestId,
+          result: response
+        });
 
-      logger.debug('MCP HTTP request completed', {
-        method,
-        requestId
-      });
+        logger.debug('MCP HTTP request completed', {
+          method,
+          requestId,
+          hasResult: !!response
+        });
+      } else {
+        // This shouldn't happen (notification should have been handled above),
+        // but handle it gracefully just in case
+        logger.warn('Response generated for notification, but notification should have been handled', { method });
+        res.status(200).end();
+      }
 
     } catch (error) {
       logger.error('MCP HTTP request error', {

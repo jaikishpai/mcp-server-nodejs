@@ -2,7 +2,10 @@ import { logger } from './logger.js';
 
 /**
  * API Key authentication middleware for MCP endpoint
- * Supports both x-mcp-api-key header and Authorization: Bearer <key>
+ * Supports multiple authentication header formats:
+ * - x-mcp-api-key header (preferred for MCP)
+ * - x-api-key header (alternative/common format)
+ * - Authorization: Bearer <key> (standard HTTP auth)
  * 
  * If MCP_API_KEY is not set, allows requests in development mode but logs a warning
  */
@@ -33,8 +36,9 @@ export function mcpApiKeyAuth(req, res, next) {
     return next();
   }
 
-  // Check for API key in headers
+  // Check for API key in headers (try multiple header formats)
   const providedKey = req.headers['x-mcp-api-key'] || 
+                     req.headers['x-api-key'] ||
                      (req.headers.authorization && req.headers.authorization.startsWith('Bearer ') 
                        ? req.headers.authorization.substring(7) 
                        : null);
@@ -49,7 +53,7 @@ export function mcpApiKeyAuth(req, res, next) {
       jsonrpc: '2.0',
       error: {
         code: -32001,
-        message: 'Unauthorized: Missing API key. Provide x-mcp-api-key header or Authorization: Bearer <key>'
+        message: 'Unauthorized: Missing API key. Provide x-mcp-api-key, x-api-key header, or Authorization: Bearer <key>'
       }
     });
   }
