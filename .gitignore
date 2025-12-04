@@ -31,7 +31,3 @@ Thumbs.db
 # Build artifacts
 dist/
 build/
-
-# Oracle Instant Client (if downloaded manually)
-oracle-instantclient-*.zip
-
