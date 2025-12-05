@@ -10,10 +10,37 @@ import { logger } from '../logger.js';
  */
 export async function getSchema(args) {
   try {
-    const { tableName, schema } = args;
+    let { tableName, schema } = args;
 
     if (!tableName || typeof tableName !== 'string') {
       throw new Error('tableName is required and must be a string');
+    }
+
+    // If tableName contains a dot, split it into schema and tableName
+    const normalizedTableName = tableName.trim().toUpperCase();
+    const dotIndex = normalizedTableName.indexOf('.');
+    
+    if (dotIndex !== -1) {
+      // Split schema.tableName
+      const extractedSchema = normalizedTableName.substring(0, dotIndex);
+      const extractedTableName = normalizedTableName.substring(dotIndex + 1);
+      
+      // Use extracted values, but schema parameter takes precedence if explicitly provided
+      if (!schema) {
+        schema = extractedSchema;
+      }
+      tableName = extractedTableName;
+      
+      logger.debug('Split schema.tableName', { 
+        original: args.tableName,
+        extractedSchema,
+        extractedTableName,
+        finalSchema: schema,
+        finalTableName: tableName
+      });
+    } else {
+      // No dot, just normalize
+      tableName = normalizedTableName;
     }
 
     // Query to get column information
@@ -112,7 +139,7 @@ export async function getSchema(args) {
     return {
       success: true,
       data: {
-        tableName: tableName.toUpperCase(),
+        tableName: tableName, // Already normalized, no schema prefix
         schema: schema ? schema.toUpperCase() : 'current user',
         columns: enhancedColumns,
         columnCount: enhancedColumns.length,
@@ -140,7 +167,7 @@ export const getSchemaSchema = {
     properties: {
       tableName: {
         type: 'string',
-        description: 'Name of the table to get schema for'
+        description: 'Name of the table to get schema for. Can be "TABLE_NAME" or "SCHEMA.TABLE_NAME". If schema prefix is provided, it will be used unless schema parameter is explicitly set.'
       },
       schema: {
         type: 'string',
