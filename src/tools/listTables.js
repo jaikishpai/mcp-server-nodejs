@@ -43,12 +43,15 @@ export async function listTables(args) {
 
     const result = await executeQuery(sql, binds, { maxRows: 10000 });
 
+    // Extract only table names (no schema prefix)
+    const tableNames = result.rows.map(row => row.TABLE_NAME);
+
     return {
       success: true,
       data: {
-        tables: result.rows,
+        tables: tableNames, // Return only table names, not full objects
         count: result.rowCount,
-        schema: schema || 'current user'
+        schema: schema ? schema.toUpperCase() : 'current user'
       }
     };
   } catch (error) {

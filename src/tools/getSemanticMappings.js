@@ -15,6 +15,34 @@ let SEMANTIC_MAPPINGS = null;
 let loadPromise = null;
 
 /**
+ * Split schema.tableName into separate schema and tableName
+ * @param {string} input - Input string (may be "schema.table" or just "table")
+ * @returns {Object} { schema: string|null, tableName: string }
+ */
+function splitTableName(input) {
+  if (!input || typeof input !== 'string') {
+    return { schema: null, tableName: null };
+  }
+  
+  const trimmed = input.trim().toUpperCase();
+  const dotIndex = trimmed.indexOf('.');
+  
+  if (dotIndex === -1) {
+    // No schema prefix
+    return { schema: null, tableName: trimmed };
+  }
+  
+  // Has schema prefix
+  const schema = trimmed.substring(0, dotIndex);
+  const tableName = trimmed.substring(dotIndex + 1);
+  
+  return {
+    schema: schema || null,
+    tableName: tableName || null
+  };
+}
+
+/**
  * Load all semantic mapping JSON files from the schemas folder
  * Uses lenient error handling - skips invalid files and continues loading others
  * @returns {Promise<Object>} Map of tableName -> schema object
@@ -71,8 +99,21 @@ async function loadSemanticMappings() {
             continue;
           }
 
-          // Normalize table name to uppercase
-          const tableName = schemaData.tableName.toUpperCase().trim();
+          // Split schema.tableName if present
+          const { schema: extractedSchema, tableName: extractedTableName } = splitTableName(schemaData.tableName);
+          
+          if (!extractedTableName) {
+            logger.warn('Skipping schema file - invalid tableName', { 
+              file,
+              filePath,
+              tableName: schemaData.tableName
+            });
+            skippedCount++;
+            continue;
+          }
+
+          // Normalize table name (without schema prefix)
+          const tableName = extractedTableName;
 
           // Check for duplicates (warn but use the last one)
           if (mappings[tableName]) {
@@ -83,9 +124,15 @@ async function loadSemanticMappings() {
             });
           }
 
-          // Store mapping with metadata
+          // Store mapping with normalized tableName and extracted schema
+          // Note: schemaData.schema is the JSON schema object, extractedSchema is the Oracle schema name
+          const oracleSchema = extractedSchema || null;
+          
+          // Preserve the JSON schema object (schemaData.schema) but also store Oracle schema separately
           mappings[tableName] = {
             ...schemaData,
+            tableName: tableName, // Store only table name (no schema prefix)
+            oracleSchema: oracleSchema, // Store Oracle schema name separately
             _sourceFile: file // Track which file this came from
           };
 
@@ -154,14 +201,28 @@ export async function getSemanticMappings(args) {
 
     // If tableName is provided, return specific mapping
     if (tableName) {
-      const normalizedTableName = tableName.toUpperCase().trim();
-      const mapping = mappings[normalizedTableName];
+      // Split schema.tableName if present
+      const { schema: inputSchema, tableName: inputTableName } = splitTableName(tableName);
+      
+      if (!inputTableName) {
+        return {
+          success: false,
+          error: {
+            message: `Invalid tableName: ${tableName}`,
+            code: 'INVALID_TABLE_NAME',
+            availableTables: Object.keys(mappings)
+          }
+        };
+      }
+
+      // Look up by table name only (no schema prefix)
+      const mapping = mappings[inputTableName];
 
       if (!mapping) {
         return {
           success: false,
           error: {
-            message: `No semantic mapping found for table: ${tableName}`,
+            message: `No semantic mapping found for table: ${inputTableName}`,
             code: 'MAPPING_NOT_FOUND',
             availableTables: Object.keys(mappings)
           }
@@ -169,13 +230,24 @@ export async function getSemanticMappings(args) {
       }
 
       // Return mapping without internal metadata
-      const { _sourceFile, ...mappingData } = mapping;
+      const { _sourceFile, oracleSchema, ...mappingData } = mapping;
+      
+      // Ensure mapping.tableName is normalized (no schema prefix)
+      const normalizedMapping = {
+        ...mappingData,
+        tableName: inputTableName // Always table name without schema prefix
+      };
+      
+      // Add Oracle schema if available
+      if (oracleSchema) {
+        normalizedMapping.schema = oracleSchema;
+      }
       
       return {
         success: true,
         data: {
-          tableName: normalizedTableName,
-          mapping: mappingData
+          tableName: inputTableName, // Always return table name without schema prefix
+          mapping: normalizedMapping
         }
       };
     }
@@ -183,14 +255,26 @@ export async function getSemanticMappings(args) {
     // If no tableName provided, return all available mappings (without internal metadata)
     const cleanMappings = {};
     for (const [key, value] of Object.entries(mappings)) {
-      const { _sourceFile, ...cleanValue } = value;
-      cleanMappings[key] = cleanValue;
+      const { _sourceFile, oracleSchema, ...cleanValue } = value;
+      
+      // Ensure tableName is normalized (no schema prefix)
+      const normalizedMapping = {
+        ...cleanValue,
+        tableName: key // Always table name without schema prefix
+      };
+      
+      // Add Oracle schema if available
+      if (oracleSchema) {
+        normalizedMapping.schema = oracleSchema;
+      }
+      
+      cleanMappings[key] = normalizedMapping;
     }
 
     return {
       success: true,
       data: {
-        availableTables: Object.keys(mappings),
+        availableTables: Object.keys(mappings), // Only table names, no schema prefix
         mappings: cleanMappings,
         count: Object.keys(mappings).length
       }
@@ -215,7 +299,7 @@ export const getSemanticMappingsSchema = {
     properties: {
       tableName: {
         type: 'string',
-        description: 'Optional fully qualified table name (e.g., "P_COMMONUSEROBJECT.PATIENT_MASTER"). If not provided, returns all available semantic mappings.'
+        description: 'Optional table name (e.g., "PATIENT_MASTER" or "P_COMMONUSEROBJECT.PATIENT_MASTER"). Schema prefix is automatically stripped. If not provided, returns all available semantic mappings.'
       }
     }
   }
