@@ -153,10 +153,28 @@ export function createMcpHttpHandler(mcpServer) {
         }
       } else if (method === 'initialize') {
         // Handle initialize request (MCP protocol)
+        // Build tools capabilities object from registered tools
+        const toolsCapabilities = {};
+        const toolsListHandler = handlers.get('tools/list');
+        if (toolsListHandler) {
+          try {
+            const toolsListResult = await toolsListHandler();
+            if (toolsListResult && Array.isArray(toolsListResult.tools)) {
+              for (const tool of toolsListResult.tools) {
+                if (tool && tool.name) {
+                  toolsCapabilities[tool.name] = {};
+                }
+              }
+            }
+          } catch (error) {
+            logger.warn('Failed to get tools list for capabilities', { error: error.message });
+          }
+        }
+        
         response = {
           protocolVersion: '2024-11-05',
           capabilities: {
-            tools: {}
+            tools: toolsCapabilities
           },
           serverInfo: {
             name: 'mcp-oracle-server',
