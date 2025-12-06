@@ -98,22 +98,34 @@ export function createMcpHttpHandler(mcpServer) {
       hasParams: Object.keys(params).length > 0
     });
 
+    let responseSent = false;
+    
     try {
       // Set timeout for request handling (30 seconds default)
       const timeout = parseInt(process.env.MCP_REQUEST_TIMEOUT || '30000');
+      let timeoutId = null;
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Request timeout')), timeout);
+        timeoutId = setTimeout(() => reject(new Error('Request timeout')), timeout);
       });
 
       // Route to appropriate handler
       let response;
+      let handlerPromise = null;
       
       logger.debug('Routing MCP request', { method, isNotification });
       
       if (method === 'tools/list') {
         const handler = handlers.get('tools/list');
         if (handler) {
-          response = await Promise.race([handler(), timeoutPromise]);
+          handlerPromise = handler().catch(err => {
+            // If response already sent (timeout occurred), ignore handler errors
+            if (responseSent) {
+              logger.debug('Ignoring handler error after timeout', { error: err.message });
+              return null;
+            }
+            throw err;
+          });
+          response = await Promise.race([handlerPromise, timeoutPromise]);
         } else {
           logger.error('tools/list handler not found in handlers map', {
             allHandlers: Array.from(handlers.keys())
@@ -124,7 +136,15 @@ export function createMcpHttpHandler(mcpServer) {
         const handler = handlers.get('tools/call');
         if (handler) {
           // MCP tools/call expects { name, arguments } in params
-          response = await Promise.race([handler({ params }), timeoutPromise]);
+          handlerPromise = handler({ params }).catch(err => {
+            // If response already sent (timeout occurred), ignore handler errors
+            if (responseSent) {
+              logger.debug('Ignoring handler error after timeout', { error: err.message });
+              return null;
+            }
+            throw err;
+          });
+          response = await Promise.race([handlerPromise, timeoutPromise]);
         } else {
           logger.error('tools/call handler not found in handlers map', {
             allHandlers: Array.from(handlers.keys())
@@ -158,9 +178,15 @@ export function createMcpHttpHandler(mcpServer) {
         throw new Error(`Unsupported method: ${method}`);
       }
 
+      // Clear timeout if handler completed successfully
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+
       // Only send response if this is a request (not a notification)
       if (!isNotification) {
         // Send JSON-RPC response
+        responseSent = true;
         res.status(200).json({
           jsonrpc: '2.0',
           id: requestId,
@@ -176,10 +202,16 @@ export function createMcpHttpHandler(mcpServer) {
         // This shouldn't happen (notification should have been handled above),
         // but handle it gracefully just in case
         logger.warn('Response generated for notification, but notification should have been handled', { method });
+        responseSent = true;
         res.status(200).end();
       }
 
     } catch (error) {
+      // Clear timeout on error
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+
       logger.error('MCP HTTP request error', {
         method,
         requestId,
@@ -187,8 +219,15 @@ export function createMcpHttpHandler(mcpServer) {
         stack: error.stack
       });
 
+      // Don't send response if already sent (e.g., timeout already handled)
+      if (responseSent) {
+        logger.debug('Response already sent, ignoring error', { error: error.message });
+        return;
+      }
+
       // Handle timeout specifically
       if (error.message === 'Request timeout') {
+        responseSent = true;
         return res.status(504).json({
           jsonrpc: '2.0',
           id: requestId,
@@ -201,6 +240,7 @@ export function createMcpHttpHandler(mcpServer) {
       }
 
       // Handle other errors
+      responseSent = true;
       res.status(500).json({
         jsonrpc: '2.0',
         id: requestId,

@@ -89,7 +89,7 @@ export async function getSchema(args) {
       pkSql = `
         SELECT 
           column_name,
-          constraint_name
+          acc.constraint_name
         FROM all_cons_columns acc
         JOIN all_constraints ac ON acc.constraint_name = ac.constraint_name
           AND acc.owner = ac.owner
@@ -103,7 +103,7 @@ export async function getSchema(args) {
       pkSql = `
         SELECT 
           column_name,
-          constraint_name
+          ucc.constraint_name
         FROM user_cons_columns ucc
         JOIN user_constraints uc ON ucc.constraint_name = uc.constraint_name
         WHERE uc.constraint_type = 'P'
