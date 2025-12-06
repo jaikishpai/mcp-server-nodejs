@@ -10,6 +10,7 @@ import { listTables, listTablesSchema } from './tools/listTables.js';
 import { getSchema, getSchemaSchema } from './tools/getSchema.js';
 import { nl2sql, nl2sqlSchema } from './tools/nl2sql.js';
 import { getSemanticMappings, getSemanticMappingsSchema } from './tools/getSemanticMappings.js';
+import { searchPatients, searchPatientsSchema } from './tools/searchPatients.js';
 
 import dotenv from 'dotenv';
 import http from 'http';
@@ -82,9 +83,8 @@ async function main() {
     mcpServer.setRequestHandler('tools/list', async () => {
       return {
         tools: [
+          searchPatientsSchema,
           runQuerySchema,
-          listTablesSchema,
-          getSchemaSchema,
           nl2sqlSchema,
           getSemanticMappingsSchema
         ]
@@ -100,14 +100,11 @@ async function main() {
         let result;
 
         switch (name) {
+          case 'searchPatients':
+            result = await searchPatients(args);
+            break;
           case 'runQuery':
             result = await runQuery(args);
-            break;
-          case 'listTables':
-            result = await listTables(args);
-            break;
-          case 'getSchema':
-            result = await getSchema(args);
             break;
           case 'nl2sql':
             result = await nl2sql(args);
@@ -167,7 +164,7 @@ async function main() {
         metrics: '/metrics',
         webhook: '/webhook/telnyx'
       },
-      tools: ['runQuery', 'listTables', 'getSchema', 'nl2sql'],
+      tools: ['searchPatients', 'runQuery', 'nl2sql', 'getSemanticMappings'],
       authEnabled: !!process.env.MCP_API_KEY,
       oraclePool: {
         min: parseInt(process.env.ORACLE_POOL_MIN || '2'),
