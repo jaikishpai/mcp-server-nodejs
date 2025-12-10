@@ -1,5 +1,6 @@
 import oracledb from 'oracledb';
 import { logger } from './logger.js';
+import { validateNoSemicolons } from './util/validators.js';
 
 let pool = null;
 
@@ -102,12 +103,27 @@ export async function getConnection() {
  * @param {string} sql - SQL query to execute
  * @param {Object} binds - Query bind parameters
  * @param {Object} options - Query options (outFormat, maxRows, etc.)
+ * @param {boolean} options.approved - If true, bypasses semicolon check (for internal use)
  * @returns {Promise<Object>} Query results
  */
 export async function executeQuery(sql, binds = {}, options = {}) {
   let connection;
   
   try {
+    // Reject SQL containing semicolons (unless approved for internal use)
+    if (!options.approved) {
+      validateNoSemicolons(sql);
+    }
+    
+    // SQL audit logging
+    logger.info('DB_EXECUTE', {
+      sql: sql.substring(0, 500), // Truncate for logging
+      binds: Object.keys(binds),
+      bindCount: Object.keys(binds).length,
+      timestamp: new Date().toISOString(),
+      approved: options.approved || false
+    });
+    
     connection = await getConnection();
     
     // Default options
@@ -151,13 +167,30 @@ export async function executeQuery(sql, binds = {}, options = {}) {
       }
     };
   } catch (error) {
+    // Normalize Oracle errors
+    const normalizedError = {
+      message: error.message || 'Unknown database error',
+      code: error.errorNum || error.code || 'UNKNOWN',
+      sqlState: error.sqlState || null,
+      offset: error.offset || null
+    };
+    
     logger.error('Query execution failed', { 
-      error: error.message, 
+      error: normalizedError.message, 
       sql: sql.substring(0, 200),
-      errorCode: error.errorNum,
+      errorCode: normalizedError.code,
+      sqlState: normalizedError.sqlState,
       stack: error.stack 
     });
-    throw error;
+    
+    // Create error object with normalized properties
+    const dbError = new Error(normalizedError.message);
+    dbError.errorNum = normalizedError.code;
+    dbError.sqlState = normalizedError.sqlState;
+    dbError.offset = normalizedError.offset;
+    dbError.originalError = error;
+    
+    throw dbError;
   } finally {
     if (connection) {
       try {

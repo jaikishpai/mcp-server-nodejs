@@ -1,5 +1,6 @@
 import { executeQuery } from '../oracle.js';
 import { logger } from '../logger.js';
+import { validateIdentifier } from '../util/validators.js';
 
 /**
  * MCP Tool: Get schema information for a table
@@ -43,11 +44,16 @@ export async function getSchema(args) {
       tableName = normalizedTableName;
     }
 
+    // Validate identifiers (Oracle doesn't allow binding identifiers)
+    const validatedTableName = validateIdentifier(tableName);
+    const validatedSchema = schema ? validateIdentifier(schema) : null;
+
     // Query to get column information
+    // Use validated interpolation for identifiers (schema/table names)
     let sql;
     let binds = {};
 
-    if (schema) {
+    if (validatedSchema) {
       sql = `
         SELECT 
           column_name,
@@ -59,10 +65,10 @@ export async function getSchema(args) {
           data_default,
           column_id
         FROM all_tab_columns
-        WHERE owner = UPPER(:schema) AND table_name = UPPER(:tableName)
+        WHERE owner = '${validatedSchema}' AND table_name = '${validatedTableName}'
         ORDER BY column_id
       `;
-      binds = { schema, tableName };
+      binds = {};
     } else {
       sql = `
         SELECT 
@@ -75,17 +81,18 @@ export async function getSchema(args) {
           data_default,
           column_id
         FROM user_tab_columns
-        WHERE table_name = UPPER(:tableName)
+        WHERE table_name = '${validatedTableName}'
         ORDER BY column_id
       `;
-      binds = { tableName };
+      binds = {};
     }
 
     // Query to get primary key information
+    // Use validated interpolation for identifiers
     let pkSql;
     let pkBinds = {};
 
-    if (schema) {
+    if (validatedSchema) {
       pkSql = `
         SELECT 
           column_name,
@@ -94,11 +101,11 @@ export async function getSchema(args) {
         JOIN all_constraints ac ON acc.constraint_name = ac.constraint_name
           AND acc.owner = ac.owner
         WHERE ac.constraint_type = 'P'
-          AND acc.owner = UPPER(:schema)
-          AND acc.table_name = UPPER(:tableName)
+          AND acc.owner = '${validatedSchema}'
+          AND acc.table_name = '${validatedTableName}'
         ORDER BY acc.position
       `;
-      pkBinds = { schema, tableName };
+      pkBinds = {};
     } else {
       pkSql = `
         SELECT 
@@ -107,13 +114,16 @@ export async function getSchema(args) {
         FROM user_cons_columns ucc
         JOIN user_constraints uc ON ucc.constraint_name = uc.constraint_name
         WHERE uc.constraint_type = 'P'
-          AND ucc.table_name = UPPER(:tableName)
+          AND ucc.table_name = '${validatedTableName}'
         ORDER BY ucc.position
       `;
-      pkBinds = { tableName };
+      pkBinds = {};
     }
 
-    logger.info('Getting schema via MCP tool', { tableName, schema: schema || 'current user' });
+    logger.info('Getting schema via MCP tool', { 
+      tableName: validatedTableName, 
+      schema: validatedSchema || 'current user' 
+    });
 
     const [columnsResult, pkResult] = await Promise.all([
       executeQuery(sql, binds, { maxRows: 1000 }),
@@ -139,8 +149,8 @@ export async function getSchema(args) {
     return {
       success: true,
       data: {
-        tableName: tableName, // Already normalized, no schema prefix
-        schema: schema ? schema.toUpperCase() : 'current user',
+        tableName: validatedTableName, // Validated and normalized
+        schema: validatedSchema || 'current user',
         columns: enhancedColumns,
         columnCount: enhancedColumns.length,
         primaryKeys: pkResult.rows.map(row => row.COLUMN_NAME),

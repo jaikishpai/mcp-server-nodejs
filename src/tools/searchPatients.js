@@ -1,5 +1,8 @@
 import { executeQuery } from '../oracle.js';
 import { logger } from '../logger.js';
+import { getSemanticMappings } from './getSemanticMappings.js';
+import { validateIdentifier } from '../util/validators.js';
+import { fillTemplate } from '../util/templateEngine.js';
 
 /**
  * ============================================================
@@ -40,94 +43,20 @@ const FRIENDLY_MAP = {
 
 /**
  * ============================================================
- * BLOCKLIST — fields NOT allowed in fallback (Option B)
- * ============================================================
- */
-const BLOCKLIST = [
-  "SSN",
-  "VISA_NUM",
-  "DRIVING_LICENSE_NUM",
-  "ACCOUNT_NUM",
-  "ROUTING_NUM",
-  "CCARD1_ACCOUNT_NUM",
-  "CCARD2_ACCOUNT_NUM",
-  "CCARD3_ACCOUNT_NUM",
-  "CCARD4_ACCOUNT_NUM",
-  "CCARD1_HOLDER",
-  "CCARD1_NAME",
-  "CCARD2_HOLDER",
-  "CCARD3_HOLDER",
-  "CCARD4_HOLDER",
-  "BILL_COLLECTION_INFO",
-  "BILL_COLLECTION_DATE",
-
-  // Attribute fields blocked (Option B)
-  ...Array.from({ length: 20 }).map((_, i) => `ATTRIBUTE${i + 1}`),
-  ...Array.from({ length: 20 }).map((_, i) => `GLOBAL_ATTRIBUTE${i + 1}`)
-];
-
-/**
- * ============================================================
- * Canonical table
- * ============================================================
- */
-const CANONICAL_SCHEMA = "PS_MCPUSER";
-const CANONICAL_TABLE = "PATIENT_MASTER";
-
-/**
- * ============================================================
- * Date / Timestamp Validators
+ * Date Validators
  * ============================================================
  */
 function isValidDateYYYYMMDD(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
 
-function isValidTimestamp(value) {
-  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value);
-}
-
 /**
  * ============================================================
- * Schema Cache (Column Types)
+ * Build WHERE clause using ONLY friendly mappings
+ * NO column guessing - all columns must be in FRIENDLY_MAP
  * ============================================================
  */
-let SCHEMA_CACHE = null;
-
-async function loadTableSchema() {
-  if (SCHEMA_CACHE) return SCHEMA_CACHE;
-
-  const sql = `
-    SELECT COLUMN_NAME, DATA_TYPE
-    FROM ALL_TAB_COLUMNS
-    WHERE OWNER = :schema AND TABLE_NAME = :table
-  `;
-
-  const result = await executeQuery(sql, {
-    schema: CANONICAL_SCHEMA,
-    table: CANONICAL_TABLE
-  });
-
-  const schema = {};
-  for (const row of result.rows) {
-    schema[row.COLUMN_NAME] = row.DATA_TYPE;
-  }
-
-  SCHEMA_CACHE = schema;
-
-  logger.info("Schema loaded for fallback engine", {
-    columns: Object.keys(schema).length
-  });
-
-  return schema;
-}
-
-/**
- * ============================================================
- * Build WHERE clause with friendly mappings + fallback
- * ============================================================
- */
-function buildFilterExpressions(filters, schema, binds) {
+function buildFilterExpressions(filters, binds) {
   const conditions = [];
 
   for (const [friendlyField, value] of Object.entries(filters)) {
@@ -135,95 +64,44 @@ function buildFilterExpressions(filters, schema, binds) {
 
     const mapped = FRIENDLY_MAP[friendlyField];
 
-    /**
-     * ========================
-     * Friendly Mapping Exists
-     * ========================
-     */
-    if (mapped) {
-      if (Array.isArray(mapped)) {
-        const orList = [];
-        mapped.forEach((col, i) => {
-          const bind = `${friendlyField}_${i}`;
-          binds[bind] = `%${value}%`;
-          orList.push(`UPPER(${col}) LIKE UPPER(:${bind})`);
-        });
-        conditions.push(`(${orList.join(" OR ")})`);
-      } else {
-        const col = mapped;
-        const bind = friendlyField;
-
-        if (schema[col] === "DATE") {
-          if (!isValidDateYYYYMMDD(value)) {
-            logger.warn("Invalid date format for friendly field", { field: friendlyField, value });
-            continue;
-          }
-          binds[bind] = value;
-          conditions.push(`${col} = TO_DATE(:${bind}, 'YYYY-MM-DD')`);
-        } else {
-          binds[bind] = `%${value}%`;
-          conditions.push(`UPPER(${col}) LIKE UPPER(:${bind})`);
-        }
-      }
+    // REJECT any field not in friendly map
+    if (!mapped) {
+      logger.warn("Ignoring unknown field - not in friendly mappings", { field: friendlyField });
       continue;
     }
 
     /**
-     * ========================
-     * Smart Fallback
-     * ========================
+     * Handle array mappings (multiple columns for one field)
      */
-    const col = friendlyField.toUpperCase();
+    if (Array.isArray(mapped)) {
+      const orList = [];
+      mapped.forEach((col, i) => {
+        const bind = `${friendlyField}_${i}`;
+        binds[bind] = `%${value}%`;
+        orList.push(`UPPER(${col}) LIKE UPPER(:${bind})`);
+      });
+      conditions.push(`(${orList.join(" OR ")})`);
+    } else {
+      /**
+     * Handle single column mapping
+     */
+      const col = mapped;
+      const bind = friendlyField;
 
-    if (!schema[col]) {
-      logger.warn("Ignoring unknown field from AI", { field: friendlyField });
-      continue;
-    }
-
-    if (BLOCKLIST.includes(col)) {
-      logger.warn("Blocked sensitive fallback column", { col });
-      continue;
-    }
-
-    const bind = `fb_${col}`;
-    const type = schema[col];
-
-    switch (type) {
-      case "NUMBER":
-        if (value === "" || isNaN(value)) {
-          logger.warn("Invalid NUMBER format", { col, value });
-          continue;
-        }
-        binds[bind] = Number(value);
-        conditions.push(`${col} = :${bind}`);
-        break;
-
-      case "DATE":
+      // Date handling
+      if (friendlyField === 'dob' || friendlyField === 'lastVisitDate' || 
+          friendlyField === 'apptDate' || friendlyField === 'followupDate') {
         if (!isValidDateYYYYMMDD(value)) {
-          logger.warn("Invalid DATE format", { col, value });
+          logger.warn("Invalid date format for friendly field", { field: friendlyField, value });
           continue;
         }
         binds[bind] = value;
         conditions.push(`${col} = TO_DATE(:${bind}, 'YYYY-MM-DD')`);
-        break;
-
-      case "TIMESTAMP":
-      case "TIMESTAMP(6)":
-        // Auto-append time if only date provided
-        let timestampValue = value;
-        if (isValidDateYYYYMMDD(value)) {
-          timestampValue = `${value} 00:00:00`;
-        } else if (!isValidTimestamp(value)) {
-          logger.warn("Invalid TIMESTAMP format", { col, value });
-          continue;
-        }
-        binds[bind] = timestampValue;
-        conditions.push(`${col} = TO_TIMESTAMP(:${bind}, 'YYYY-MM-DD HH24:MI:SS')`);
-        break;
-
-      default:
+      } else {
+        // String search (LIKE)
         binds[bind] = `%${value}%`;
         conditions.push(`UPPER(${col}) LIKE UPPER(:${bind})`);
+      }
     }
   }
 
@@ -233,32 +111,105 @@ function buildFilterExpressions(filters, schema, binds) {
 /**
  * ============================================================
  * MCP TOOL: searchPatients
+ * Deterministic workflow using semantic mappings
  * ============================================================
  */
 export async function searchPatients(args = {}) {
   try {
+    // Step 1: Get semantic mappings for PATIENT_MASTER
+    const mappingsResult = await getSemanticMappings({ tableName: 'PATIENT_MASTER' });
+    
+    if (!mappingsResult.success || !mappingsResult.data) {
+      return {
+        success: false,
+        error: {
+          message: "Unable to map fields to known schema. Missing semantic mapping for PATIENT_MASTER.",
+          fieldsReceived: Object.keys(args),
+          code: 'MAPPING_NOT_FOUND'
+        }
+      };
+    }
+
+    const mapping = mappingsResult.data.mapping;
+    
+    // Step 2: Validate schema and table from semantic mappings
+    const schemaName = mapping.schema ? validateIdentifier(mapping.schema) : null;
+    const tableName = validateIdentifier(mapping.tableName);
+    
+    // Build fully qualified table name
+    const qualifiedTable = schemaName ? `${schemaName}.${tableName}` : tableName;
+
+    // Step 3: Filter out empty values
     const filters = Object.fromEntries(
       Object.entries(args).filter(([_, v]) => v !== null && v !== undefined && v !== "")
     );
 
-    const schema = await loadTableSchema();
-    const binds = {};
-    const whereClause = buildFilterExpressions(filters, schema, binds);
+    if (Object.keys(filters).length === 0) {
+      // No filters - use select_all template if available
+      const templates = mapping.mcp_sql_templates || {};
+      if (templates.select_all) {
+        const { sql, binds } = fillTemplate(templates.select_all, {});
+        const result = await executeQuery(sql, binds, { maxRows: 25, approved: true });
+        
+        return {
+          success: true,
+          data: {
+            patients: result.rows,
+            count: result.rowCount,
+            filters: [],
+            table: qualifiedTable
+          }
+        };
+      } else {
+        // Fallback: simple SELECT with limit
+        const sql = `SELECT * FROM ${qualifiedTable} FETCH FIRST 25 ROWS ONLY`;
+        const result = await executeQuery(sql, {}, { maxRows: 25, approved: true });
+        
+        return {
+          success: true,
+          data: {
+            patients: result.rows,
+            count: result.rowCount,
+            filters: [],
+            table: qualifiedTable
+          }
+        };
+      }
+    }
 
+    // Step 4: Build WHERE clause using ONLY friendly mappings
+    const binds = {};
+    const whereClause = buildFilterExpressions(filters, binds);
+
+    if (!whereClause) {
+      // No valid filters after processing
+      return {
+        success: false,
+        error: {
+          message: "No valid filter fields found. All fields must be in friendly mappings.",
+          fieldsReceived: Object.keys(filters),
+          code: 'NO_VALID_FILTERS'
+        }
+      };
+    }
+
+    // Step 5: Build SQL using validated table name (never from LLM)
     const sql = `
       SELECT *
-      FROM ${CANONICAL_SCHEMA}.${CANONICAL_TABLE}
-      ${whereClause ? `WHERE ${whereClause}` : ""}
+      FROM ${qualifiedTable}
+      WHERE ${whereClause}
       FETCH FIRST 25 ROWS ONLY
     `;
 
-    logger.info("Executing smart patient search", {
-      filters,
+    logger.info("Executing deterministic patient search", {
+      filters: Object.keys(filters),
       whereClause,
-      bindCount: Object.keys(binds).length
+      bindCount: Object.keys(binds).length,
+      table: qualifiedTable
     });
 
-    const result = await executeQuery(sql, binds, { maxRows: 25 });
+    // Step 6: Execute with approved flag
+    const result = await executeQuery(sql, binds, { maxRows: 25, approved: true });
 
     return {
       success: true,
@@ -266,7 +217,7 @@ export async function searchPatients(args = {}) {
         patients: result.rows,
         count: result.rowCount,
         filters: Object.keys(filters),
-        table: `${CANONICAL_SCHEMA}.${CANONICAL_TABLE}`
+        table: qualifiedTable
       }
     };
   } catch (error) {
@@ -277,7 +228,8 @@ export async function searchPatients(args = {}) {
     return {
       success: false,
       error: {
-        message: error.message
+        message: error.message,
+        code: error.errorNum || 'UNKNOWN'
       }
     };
   }
@@ -291,7 +243,7 @@ export async function searchPatients(args = {}) {
 export const searchPatientsSchema = {
   name: "searchPatients",
   description:
-    "Smart patient search with friendly mappings + safe fallback. Supports name, DOB, MRN, SSN, phone, email, city/state, dates, balances, and more.",
+    "Deterministic patient search using semantic mappings. Only uses validated friendly field mappings - no column guessing. Requires semantic mapping for PATIENT_MASTER table.",
   inputSchema: {
     type: "object",
     properties: {

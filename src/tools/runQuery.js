@@ -1,5 +1,6 @@
 import { executeQuery } from '../oracle.js';
 import { logger } from '../logger.js';
+import { validateBindVariableName } from '../util/validators.js';
 
 /**
  * MCP Tool: Execute a SQL query
@@ -11,7 +12,15 @@ import { logger } from '../logger.js';
  */
 export async function runQuery(args) {
   try {
-    const { sql, binds = {}, maxRows = 1000 } = args;
+    const { sql, binds = {}, maxRows = 1000, approved = false } = args;
+
+    // REJECT arbitrary SQL - require approved flag
+    if (!approved) {
+      throw new Error(
+        "runQuery requires approved=true. " +
+        "Use getSemanticMappings() + getSchema() + prepareTemplate() first."
+      );
+    }
 
     if (!sql || typeof sql !== 'string') {
       throw new Error('SQL query is required and must be a string');
@@ -24,6 +33,18 @@ export async function runQuery(args) {
         parsedBinds = JSON.parse(binds);
       } catch (e) {
         logger.warn('Failed to parse binds JSON, using as-is', { binds });
+        parsedBinds = {};
+      }
+    }
+
+    // Validate bind variable names (only allow safe characters)
+    if (parsedBinds && typeof parsedBinds === 'object' && !Array.isArray(parsedBinds)) {
+      for (const [key, value] of Object.entries(parsedBinds)) {
+        try {
+          validateBindVariableName(key);
+        } catch (err) {
+          throw new Error(`Invalid bind variable name: ${key}. ${err.message}`);
+        }
       }
     }
 
@@ -36,10 +57,12 @@ export async function runQuery(args) {
     logger.info('Executing SQL query via MCP tool', { 
       sqlLength: sql.length,
       hasBinds: Object.keys(parsedBinds).length > 0,
-      maxRows: maxRowsNum
+      maxRows: maxRowsNum,
+      approved: true
     });
 
-    const result = await executeQuery(sql, parsedBinds, { maxRows: maxRowsNum });
+    // Pass approved flag to executeQuery
+    const result = await executeQuery(sql, parsedBinds, { maxRows: maxRowsNum, approved: true });
 
     return {
       success: true,
@@ -67,7 +90,9 @@ export const runQuerySchema = {
   name: 'runQuery',
   description: `Executes a SQL query against the Oracle database.
 
-IMPORTANT:
+CRITICAL SECURITY REQUIREMENT:
+This tool REQUIRES approved=true. It will REJECT arbitrary SQL queries.
+
 You must NOT call this tool until you have completed ALL of the following steps:
 
 1. Call getSemanticMappings() to determine the correct table for the user's request.
@@ -75,7 +100,7 @@ You must NOT call this tool until you have completed ALL of the following steps:
 
 2. Call getSchema(tableName) to retrieve the exact list of valid column names.
 
-3. Construct the SQL query ONLY using:
+3. Use SQL templates from getSemanticMappings() mcp_sql_templates, or construct SQL ONLY using:
    - The table name returned by getSemanticMappings()
    - The column names returned by getSchema()
 
@@ -85,6 +110,7 @@ STRICT RULES:
 - Do NOT use DESCRIBE (invalid in Oracle).
 - Do NOT query ALL_CONSTRAINTS, ALL_TABLES, or similar views for schema discovery.
 - If getSchema() returns an error, STOP — do not execute SQL.
+- approved=true MUST be set, otherwise the query will be rejected.
 
 This tool must be called ONLY after the above rules are satisfied.`,
   inputSchema: {
@@ -103,9 +129,14 @@ This tool must be called ONLY after the above rules are satisfied.`,
         type: 'number',
         description: 'Maximum number of rows to return (default: 1000)',
         default: 1000
+      },
+      approved: {
+        type: 'boolean',
+        description: 'MUST be true. Indicates that SQL was generated using semantic mappings and schema validation.',
+        default: false
       }
     },
-    required: ['sql']
+    required: ['sql', 'approved']
   }
 };
 
