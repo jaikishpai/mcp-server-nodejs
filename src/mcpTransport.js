@@ -42,68 +42,72 @@ export function createMcpHttpHandler(mcpServer) {
    * Handles MCP protocol messages over HTTP
    */
   return async (req, res, next) => {
-    logger.debug('MCP handler function called', {
-      path: req.path,
-      method: req.method,
-      handlersCount: handlers.size
-    });
-
-    // Validate content-type
-    const contentType = req.get('content-type') || '';
-    if (!contentType.includes('application/json')) {
-      logger.warn('Invalid content-type', { contentType });
-      return res.status(400).json({
-        jsonrpc: '2.0',
-        error: {
-          code: -32600,
-          message: 'Invalid Request: Content-Type must be application/json'
-        }
-      });
-    }
-
-    // Validate request body
-    if (!req.body || typeof req.body !== 'object') {
-      return res.status(400).json({
-        jsonrpc: '2.0',
-        error: {
-          code: -32600,
-          message: 'Invalid Request: Request body must be a JSON object'
-        }
-      });
-    }
-
-    // Validate JSON-RPC version
-    if (req.body.jsonrpc !== '2.0') {
-      return res.status(400).json({
-        jsonrpc: '2.0',
-        error: {
-          code: -32600,
-          message: 'Invalid Request: jsonrpc must be "2.0"'
-        }
-      });
-    }
-
-    const requestId = req.body.id;
-    const method = req.body.method;
-    const params = req.body.params || {};
-
-    // Check if this is a notification (no id or id is null)
-    // JSON-RPC 2.0 notifications don't have an id and don't require a response
-    const isNotification = requestId === undefined || requestId === null;
-
-    logger.debug('MCP HTTP request received', {
-      method,
-      requestId,
-      isNotification,
-      hasParams: Object.keys(params).length > 0
-    });
-
+    // Declare timeoutId at function scope to ensure it's always defined
+    let timeoutId = null;
     let responseSent = false;
-    
+
     try {
+      logger.debug('MCP handler function called', {
+        path: req.path,
+        method: req.method,
+        handlersCount: handlers.size
+      });
+
+      // Add defensive logging for incoming request
+      console.log('[MCP] Incoming request:', req.body);
+
+      // Validate content-type
+      const contentType = req.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        logger.warn('Invalid content-type', { contentType });
+        return res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32600,
+            message: 'Invalid Request: Content-Type must be application/json'
+          }
+        });
+      }
+
+      // Validate request body
+      if (!req.body || typeof req.body !== 'object') {
+        return res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32600,
+            message: 'Invalid Request: Request body must be a JSON object'
+          }
+        });
+      }
+
+      // Validate JSON-RPC version
+      if (req.body.jsonrpc !== '2.0') {
+        return res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32600,
+            message: 'Invalid Request: jsonrpc must be "2.0"'
+          }
+        });
+      }
+
+      const requestId = req.body.id;
+      const method = req.body.method;
+      const params = req.body.params || {};
+
+      // Check if this is a notification (no id or id is null)
+      // JSON-RPC 2.0 notifications don't have an id and don't require a response
+      const isNotification = requestId === undefined || requestId === null;
+
+      logger.debug('MCP HTTP request received', {
+        method,
+        requestId,
+        isNotification,
+        hasParams: Object.keys(params).length > 0
+      });
+    
       // Set timeout for request handling (30 seconds default)
       const timeout = parseInt(process.env.MCP_REQUEST_TIMEOUT || '30000');
-      let timeoutId = null;
       const timeoutPromise = new Promise((_, reject) => {
         timeoutId = setTimeout(() => reject(new Error('Request timeout')), timeout);
       });
@@ -126,6 +130,8 @@ export function createMcpHttpHandler(mcpServer) {
             throw err;
           });
           response = await Promise.race([handlerPromise, timeoutPromise]);
+          // Add defensive logging after tool execution
+          console.log('[MCP] Tool result:', response);
         } else {
           logger.error('tools/list handler not found in handlers map', {
             allHandlers: Array.from(handlers.keys())
@@ -145,6 +151,8 @@ export function createMcpHttpHandler(mcpServer) {
             throw err;
           });
           response = await Promise.race([handlerPromise, timeoutPromise]);
+          // Add defensive logging after tool execution
+          console.log('[MCP] Tool result:', response);
         } else {
           logger.error('tools/call handler not found in handlers map', {
             allHandlers: Array.from(handlers.keys())
@@ -196,11 +204,6 @@ export function createMcpHttpHandler(mcpServer) {
         throw new Error(`Unsupported method: ${method}`);
       }
 
-      // Clear timeout if handler completed successfully
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-
       // Only send response if this is a request (not a notification)
       if (!isNotification) {
         // Send JSON-RPC response
@@ -225,14 +228,12 @@ export function createMcpHttpHandler(mcpServer) {
       }
 
     } catch (error) {
-      // Clear timeout on error
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      // Log error with defensive check
+      console.error('[MCP ERROR] Unhandled exception in /mcp handler:', error);
 
       logger.error('MCP HTTP request error', {
-        method,
-        requestId,
+        method: req.body?.method,
+        requestId: req.body?.id,
         error: error.message,
         stack: error.stack
       });
@@ -242,6 +243,8 @@ export function createMcpHttpHandler(mcpServer) {
         logger.debug('Response already sent, ignoring error', { error: error.message });
         return;
       }
+
+      const requestId = req.body?.id;
 
       // Handle timeout specifically
       if (error.message === 'Request timeout') {
@@ -257,19 +260,22 @@ export function createMcpHttpHandler(mcpServer) {
         });
       }
 
-      // Handle other errors
+      // Handle other errors - return proper JSON-RPC error response
       responseSent = true;
-      res.status(500).json({
+      return res.status(500).json({
         jsonrpc: '2.0',
         id: requestId,
         error: {
-          code: -32603,
-          message: 'Internal error',
-          data: {
-            message: error.message
-          }
+          code: -32099,
+          message: 'Internal MCP server error.'
         }
       });
+    } finally {
+      // Ensure timeout is always cleared in all execution branches
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
     }
   };
 }
